@@ -14,26 +14,53 @@ CYAN='\033[1;36m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
+# DNS Servers
+PRIMARY_DNS="8.8.8.8"
+SECONDARY_DNS="8.8.4.4"
+TERTIARY_DNS="1.1.1.1"
+QUATERNARY_DNS="1.0.0.1"
+
 # Terminal width
 TERM_WIDTH=$(tput cols)
 
-# UI Helper Functions
-print_header() {
-    local text="$1"
-    local padding=$(( (TERM_WIDTH - ${#text} - 2) / 2 ))
+# Print tool header with author info
+print_banner() {
+    clear
     echo
     printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
-    printf "%${padding}s$BOLD$BLUE %s $NC%${padding}s\n" "" "$text" ""
+    echo -e "${BOLD}${BLUE}"
+    echo '                    ____  _   _ ____    ____             __ _       '
+    echo '                   |  _ \| \ | / ___|  / ___|___  _ __  / _(_) __ _ '
+    echo '                   | | | |  \| \___ \ | |   / _ \| '\''_ \| |_| |/ _` |'
+    echo '                   | |_| | |\  |___) || |__| (_) | | | |  _| | (_| |'
+    echo '                   |____/|_| \_|____/  \____\___/|_| |_|_| |_|\__, |'
+    echo '                                                               |___/ '
+    echo -e "${NC}"
+    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+    echo -e "${BOLD}${PURPLE}                          Advanced DNS Configuration Utility${NC}"
+    echo -e "${DIM}                               Version 1.1.0 - 2024${NC}"
+    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+    echo
+    echo -e "${BOLD}${CYAN}Developer Info:${NC}"
+    echo -e "${BOLD}${WHITE}  • Author:${NC}    b0urn3"
+    echo -e "${BOLD}${WHITE}  • GitHub:${NC}    github.com/q4n0"
+    echo -e "${BOLD}${WHITE}  • Twitter:${NC}   @byt3s3c"
+    echo -e "${BOLD}${WHITE}  • Instagram:${NC} @onlybyhive"
+    echo -e "${BOLD}${WHITE}  • Email:${NC}     q4n0@proton.me"
+    echo
+    echo -e "${DIM}An advanced DNS configuration utility for enhanced network optimization${NC}"
     printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
     echo
 }
 
+# Print section headers
 print_section() {
     local text="$1"
     echo -e "\n${BOLD}${CYAN}▶ ${text}${NC}"
     echo -e "${DIM}$(printf '%.s─' $(seq 1 $TERM_WIDTH))${NC}"
 }
 
+# Print status with icons
 print_status() {
     local text="$1"
     local status="$2"
@@ -47,6 +74,7 @@ print_status() {
     esac
 }
 
+# Show progress bar
 show_progress() {
     local text="$1"
     local current="$2"
@@ -62,21 +90,95 @@ show_progress() {
     printf "] ${BOLD}%3d%%${NC}" $percentage
 }
 
+# Show spinner animation
 show_spinner() {
     local pid=$1
     local text=$2
-    local spin='-\|/'
+    local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
     local i=0
     
     while kill -0 $pid 2>/dev/null; do
-        i=$(( (i + 1) % 4 ))
+        i=$(( (i + 1) % 10 ))
         printf "\r${ITALIC}%-50s${NC} ${BLUE}[${spin:$i:1}]${NC}" "$text"
         sleep .1
     done
     printf "\r%-50s${GREEN}[✓]${NC}\n" "$text"
 }
 
-# Enhanced version of find_fastest_dns
+# Detect OS
+detect_os() {
+    if [ -f /etc/debian_version ]; then
+        OS="debian"
+        PM="apt-get"
+        PM_INSTALL="$PM install -y"
+        PM_UPDATE="$PM update"
+    elif [ -f /etc/fedora-release ]; then
+        OS="fedora"
+        PM="dnf"
+        PM_INSTALL="$PM install -y"
+        PM_UPDATE="$PM update -y"
+    elif [ -f /etc/arch-release ]; then
+        OS="arch"
+        PM="pacman"
+        PM_INSTALL="$PM -S --noconfirm"
+        PM_UPDATE="$PM -Sy"
+    else
+        print_status "OS Detection" "FAIL"
+        echo -e "${RED}Unsupported operating system${NC}"
+        exit 1
+    fi
+    print_status "OS Detection" "OK"
+    echo -e "${DIM}Detected: $OS${NC}"
+}
+
+# Check root privileges
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        print_status "Root Privileges" "FAIL"
+        echo -e "${RED}Please run as root or with sudo${NC}"
+        exit 1
+    fi
+    print_status "Root Privileges" "OK"
+}
+
+# Install required packages
+install_requirements() {
+    print_status "Installing Dependencies" "INFO"
+    case $OS in
+        debian)
+            $PM_UPDATE >/dev/null 2>&1
+            $PM_INSTALL dnsutils bc mtr speedtest-cli resolvconf dnsmasq stubby >/dev/null 2>&1
+            ;;
+        fedora)
+            $PM_UPDATE >/dev/null 2>&1
+            $PM_INSTALL bind-utils bc mtr speedtest-cli systemd-resolved dnsmasq stubby >/dev/null 2>&1
+            ;;
+        arch)
+            $PM_UPDATE >/dev/null 2>&1
+            $PM_INSTALL dnsutils bc mtr speedtest-cli systemd-resolved dnsmasq stubby >/dev/null 2>&1
+            ;;
+    esac
+    print_status "Package Installation" "OK"
+}
+
+# Get active network connection
+get_active_connection() {
+    if command -v nmcli >/dev/null 2>&1; then
+        CONNECTION=$(nmcli -t -f NAME,DEVICE,STATE c show --active | grep activated | cut -d':' -f1)
+    else
+        CONNECTION=$(ip route | grep default | awk '{print $5}')
+    fi
+
+    if [ -z "$CONNECTION" ]; then
+        print_status "Network Detection" "FAIL"
+        echo -e "${RED}No active connection found${NC}"
+        exit 1
+    fi
+    print_status "Network Detection" "OK"
+    echo -e "${DIM}Active interface: $CONNECTION${NC}"
+}
+
+# Find fastest DNS
 find_fastest_dns() {
     print_section "Testing DNS Servers"
     local dns_servers=(
@@ -111,9 +213,84 @@ find_fastest_dns() {
     echo -e "\n"
     print_status "Fastest DNS Found" "OK"
     echo -e "${BOLD}${GREEN}► $fastest_name ($fastest_dns) - ${fastest_time}ms${NC}\n"
+    PRIMARY_DNS=$fastest_dns
 }
 
-# Enhanced version of test_configuration
+# Configure DNS
+configure_dns() {
+    print_section "Configuring DNS"
+    case $OS in
+        debian)
+            cat > /etc/resolv.conf << EOF
+nameserver $PRIMARY_DNS
+nameserver $SECONDARY_DNS
+nameserver $TERTIARY_DNS
+nameserver $QUATERNARY_DNS
+options edns0 trust-ad
+EOF
+            resolvconf -u
+            ;;
+        fedora|arch)
+            cat > /etc/systemd/resolved.conf << EOF
+[Resolve]
+DNS=$PRIMARY_DNS $SECONDARY_DNS
+FallbackDNS=$TERTIARY_DNS $QUATERNARY_DNS
+DNSSEC=yes
+DNSOverTLS=yes
+Cache=yes
+DNSStubListener=yes
+EOF
+            systemctl restart systemd-resolved
+            ;;
+    esac
+    print_status "DNS Configuration" "OK"
+}
+
+# Configure DNSMasq
+setup_dnsmasq() {
+    print_section "Setting up DNSMasq"
+    cat > /etc/dnsmasq.conf << EOF
+server=$PRIMARY_DNS
+server=$SECONDARY_DNS
+cache-size=1000
+no-negcache
+dns-forward-max=150
+no-resolv
+EOF
+    
+    systemctl enable dnsmasq >/dev/null 2>&1
+    systemctl restart dnsmasq >/dev/null 2>&1
+    print_status "DNSMasq Configuration" "OK"
+}
+
+# Configure Stubby
+setup_stubby() {
+    print_section "Setting up DNS-over-TLS"
+    cat > /etc/stubby/stubby.yml << EOF
+resolution_type: GETDNS_RESOLUTION_STUB
+dns_transport_list:
+  - GETDNS_TRANSPORT_TLS
+tls_authentication: GETDNS_AUTHENTICATION_REQUIRED
+tls_query_padding_blocksize: 128
+edns_client_subnet_private: 1
+round_robin_upstreams: 1
+idle_timeout: 10000
+listen_addresses:
+  - 127.0.0.1@53000
+  - 0::1@53000
+upstream_recursive_servers:
+  - address_data: $PRIMARY_DNS
+    tls_auth_name: "dns.google"
+  - address_data: $SECONDARY_DNS
+    tls_auth_name: "dns.google"
+EOF
+
+    systemctl enable stubby >/dev/null 2>&1
+    systemctl restart stubby >/dev/null 2>&1
+    print_status "DNS-over-TLS Configuration" "OK"
+}
+
+# Test configuration
 test_configuration() {
     print_section "Testing DNS Configuration"
     
@@ -146,54 +323,51 @@ test_configuration() {
     fi
 }
 
-# Main script execution with improved UI
+# Main function
 main() {
-    clear
-    print_header "DNS Configuration Utility"
+    print_banner
     
-    # Check root with better UI
-    print_section "Checking Prerequisites"
-    if [ "$EUID" -ne 0 ]; then
-        print_status "Root Privileges" "FAIL"
-        echo -e "${RED}Please run this script as root or with sudo${NC}"
-        exit 1
+    # Check if help is requested
+    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
+        echo -e "${BOLD}Usage:${NC}"
+        echo -e "  sudo ./$(basename $0) [OPTIONS]"
+        echo
+        echo -e "${BOLD}Options:${NC}"
+        echo -e "  -h, --help     Show this help message"
+        echo -e "  -v, --version  Show version information"
+        echo
+        echo -e "${BOLD}Description:${NC}"
+        echo "  This tool optimizes your DNS configuration for better"
+        echo "  performance and security. It automatically selects the"
+        echo "  fastest DNS servers and configures DNS-over-TLS for"
+        echo "  encrypted queries."
+        echo
+        echo -e "${BOLD}For more information and updates, visit:${NC}"
+        echo "  https://github.com/q4n0/dns-config"
+        echo
+        exit 0
     fi
-    print_status "Root Privileges" "OK"
-    
-    # Detect OS with better UI
-    detect_os &
-    show_spinner $! "Detecting Operating System"
-    
-    # Install requirements with progress
-    print_section "Installing Required Packages"
-    install_requirements &
-    show_spinner $! "Installing Dependencies"
-    
-    # Network detection with better UI
-    print_section "Network Configuration"
-    get_active_connection &
-    show_spinner $! "Detecting Network Interfaces"
-    
-    # Find fastest DNS with progress bar
+
+    print_section "Checking Prerequisites"
+    check_root
+    detect_os
+    install_requirements
+    get_active_connection
     find_fastest_dns
-    
-    # Configure DNS with status updates
-    print_section "Applying DNS Configuration"
-    configure_dns &
-    show_spinner $! "Updating DNS Settings"
-    
-    setup_dnsmasq &
-    show_spinner $! "Configuring DNSMasq"
-    
-    setup_stubby &
-    show_spinner $! "Setting up DNS-over-TLS"
-    
-    # Test configuration with detailed results
+    configure_dns
+    setup_dnsmasq
+    setup_stubby
     test_configuration
     
-    print_header "Configuration Complete"
-    echo -e "${GREEN}DNS configuration has been successfully completed!${NC}\n"
+    print_header() {
+        printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+        echo -e "${BOLD}${GREEN}                              Configuration Complete${NC}"
+        printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+        echo -e "${GREEN}DNS configuration has been successfully completed!${NC}\n"
+    }
+    
+    print_header
 }
 
-# Run main function
+# Run main function with arguments
 main "$@"
