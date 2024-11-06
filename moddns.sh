@@ -105,21 +105,14 @@ show_spinner() {
     printf "\r%-50s${GREEN}[✓]${NC}\n" "$text"
 }
 
-# Function to check if a package is installed
-check_package() {
-    local package="$1"
-    case $OS in
-        debian)
-            dpkg -l "$package" >/dev/null 2>&1
-            ;;
-        fedora)
-            rpm -q "$package" >/dev/null 2>&1
-            ;;
-        arch)
-            pacman -Qi "$package" >/dev/null 2>&1
-            ;;
-    esac
-    return $?
+# Check root privileges
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        print_status "Root Privileges" "FAIL"
+        echo -e "${RED}Please run as root or with sudo${NC}"
+        exit 1
+    fi
+    print_status "Root Privileges" "OK"
 }
 
 # Detect OS
@@ -148,371 +141,183 @@ detect_os() {
     echo -e "${DIM}Detected: $OS${NC}"
 }
 
-# Check root privileges
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        print_status "Root Privileges" "FAIL"
-        echo -e "${RED}Please run as root or with sudo${NC}"
-        exit 1
-    fi
-    print_status "Root Privileges" "OK"
-}
-
-# Install required packages with improved checking
-install_requirements() {
-    print_section "Checking and Installing Dependencies"
-    
-    # Define required packages for each OS
-    declare -A packages
+# Function to check if a package is installed
+check_package() {
+    local package="$1"
     case $OS in
         debian)
-            packages=(
-                ["dnsutils"]="DNS utilities"
-                ["bc"]="Basic calculator"
-                ["mtr"]="Network diagnostic tool"
-                ["speedtest-cli"]="Internet speed test"
-                ["resolvconf"]="DNS resolver configuration"
-                ["dnsmasq"]="DNS forwarder"
-                ["stubby"]="DNS-over-TLS resolver"
-            )
+            dpkg -l "$package" >/dev/null 2>&1
             ;;
         fedora)
-            packages=(
-                ["bind-utils"]="DNS utilities"
-                ["bc"]="Basic calculator"
-                ["mtr"]="Network diagnostic tool"
-                ["speedtest-cli"]="Internet speed test"
-                ["systemd-resolved"]="System resolver"
-                ["dnsmasq"]="DNS forwarder"
-                ["stubby"]="DNS-over-TLS resolver"
-            )
+            rpm -q "$package" >/dev/null 2>&1
             ;;
         arch)
-            packages=(
-                ["dnsutils"]="DNS utilities"
-                ["bc"]="Basic calculator"
-                ["mtr"]="Network diagnostic tool"
-                ["speedtest-cli"]="Internet speed test"
-                ["systemd-resolved"]="System resolver"
-                ["dnsmasq"]="DNS forwarder"
-                ["stubby"]="DNS-over-TLS resolver"
-            )
+            pacman -Qi "$package" >/dev/null 2>&1
             ;;
     esac
-
-    # Count total packages for progress bar
-    local total_packages=${#packages[@]}
-    local current=0
-    local missing_packages=()
-    local installed_count=0
-    
-    echo -e "${DIM}Checking installed packages...${NC}\n"
-    
-    # Check existing packages
-    for pkg in "${!packages[@]}"; do
-        current=$((current + 1))
-        show_progress "Checking ${packages[$pkg]}" $current $total_packages
-        
-        if check_package "$pkg"; then
-            installed_count=$((installed_count + 1))
-        else
-            missing_packages+=("$pkg")
-        fi
-        sleep 0.1
-    done
-    echo -e "\n"
-    
-    # Print status of installed packages
-    if [ ${#missing_packages[@]} -eq 0 ]; then
-        print_status "Required Packages" "OK"
-        echo -e "${DIM}All required packages are already installed${NC}"
-        return 0
-    fi
-    
-    # Install missing packages
-    print_status "Missing Packages" "INFO"
-    echo -e "${DIM}The following packages need to be installed:${NC}"
-    for pkg in "${missing_packages[@]}"; do
-        echo -e "${YELLOW}  • ${pkg} - ${packages[$pkg]}${NC}"
-    done
-    echo
-    
-    # Update package manager
-    print_status "Updating Package Manager" "INFO"
-    (
-        case $OS in
-            debian)
-                $PM_UPDATE >/dev/null 2>&1
-                ;;
-            fedora)
-                $PM_UPDATE >/dev/null 2>&1
-                ;;
-            arch)
-                $PM_UPDATE >/dev/null 2>&1
-                ;;
-        esac
-    ) &
-    show_spinner $! "Updating package database"
-    
-    # Install missing packages with progress
-    local install_current=0
-    local install_total=${#missing_packages[@]}
-    
-    for pkg in "${missing_packages[@]}"; do
-        install_current=$((install_current + 1))
-        print_status "Installing ${packages[$pkg]}" "INFO"
-        (
-            case $OS in
-                debian|fedora|arch)
-                    $PM_INSTALL "$pkg" >/dev/null 2>&1
-                    ;;
-            esac
-        ) &
-        show_spinner $! "Installing $pkg"
-    done
-    
-    # Verify installations
-    local verify_failed=()
-    for pkg in "${missing_packages[@]}"; do
-        if ! check_package "$pkg"; then
-            verify_failed+=("$pkg")
-        fi
-    done
-    
-    if [ ${#verify_failed[@]} -eq 0 ]; then
-        print_status "Package Installation" "OK"
-        echo -e "${DIM}Successfully installed ${#missing_packages[@]} packages${NC}"
-    else
-        print_status "Package Installation" "WARN"
-        echo -e "${RED}Failed to install: ${verify_failed[*]}${NC}"
-        exit 1
-    fi
+    return $?
 }
 
-# Get active network connection
-get_active_connection() {
-    if command -v nmcli >/dev/null 2>&1; then
-        CONNECTION=$(nmcli -t -f NAME,DEVICE,STATE c show --active | grep activated | cut -d':' -f1)
-    else
-        CONNECTION=$(ip route | grep default | awk '{print $5}')
-    fi
-
-    if [ -z "$CONNECTION" ]; then
-        print_status "Network Detection" "FAIL"
-        echo -e "${RED}No active connection found${NC}"
-        exit 1
-    fi
-    print_status "Network Detection" "OK"
-    echo -e "${DIM}Active interface: $CONNECTION${NC}"
-}
-
-# Find fastest DNS
-find_fastest_dns() {
-    print_section "Testing DNS Servers"
-    local dns_servers=(
-        "8.8.8.8;Google DNS Primary"
-        "8.8.4.4;Google DNS Secondary"
-        "1.1.1.1;Cloudflare Primary"
-        "1.0.0.1;Cloudflare Secondary"
+# Install required packages
+install_requirements() {
+    print_section "Installing Required Packages"
+    
+    local packages=(
+        "dnsutils" "bc" "mtr" "speedtest-cli" "net-tools" "network-manager"
+        "resolvconf" "dnsmasq" "stubby" "bind9-utils" "iputils-ping"
     )
     
-    local fastest_time=999
-    local fastest_dns=""
-    local fastest_name=""
-    local current=0
-    local total=${#dns_servers[@]}
+    # Update package manager
+    echo -e "${DIM}Updating package manager...${NC}"
+    $PM_UPDATE >/dev/null 2>&1
     
-    echo -e "${DIM}Testing response times from multiple providers...${NC}\n"
-    
-    for entry in "${dns_servers[@]}"; do
-        IFS=';' read -r dns name <<< "$entry"
-        current=$((current + 1))
-        
-        show_progress "Testing $name" $current $total
-        local response_time=$(dig @"$dns" google.com +time=2 +tries=1 2>/dev/null | grep "Query time:" | awk '{print $4}')
-        
-        if [ ! -z "$response_time" ] && [ "$response_time" -lt "$fastest_time" ]; then
-            fastest_time=$response_time
-            fastest_dns=$dns
-            fastest_name=$name
+    for package in "${packages[@]}"; do
+        if ! check_package "$package"; then
+            echo -e "${DIM}Installing $package...${NC}"
+            $PM_INSTALL "$package" >/dev/null 2>&1 || true
         fi
-        sleep 0.5
     done
-    echo -e "\n"
-    print_status "Fastest DNS Found" "OK"
-    echo -e "${BOLD}${GREEN}► $fastest_name ($fastest_dns) - ${fastest_time}ms${NC}\n"
-    PRIMARY_DNS=$fastest_dns
+    
+    print_status "Package Installation" "OK"
+}
+
+# Disable metered connections
+disable_metered_connections() {
+    print_section "Metered Connection Management"
+    
+    if ! command -v nmcli >/dev/null 2>&1; then
+        print_status "NetworkManager" "WARN"
+        echo -e "${DIM}NetworkManager not installed - installing...${NC}"
+        $PM_INSTALL network-manager >/dev/null 2>&1
+    fi
+    
+    # Get all connections
+    local connections=$(nmcli -t -f UUID,NAME,TYPE c show)
+    
+    while IFS=: read -r uuid name type; do
+        if [ ! -z "$uuid" ]; then
+            local metered=$(nmcli -g connection.metered connection show "$uuid" 2>/dev/null)
+            if [ "$metered" = "yes" ]; then
+                echo -e "${DIM}Disabling metered connection: $name${NC}"
+                nmcli connection modify "$uuid" connection.metered no
+            fi
+        fi
+    done <<< "$connections"
+    
+    print_status "Metered Connections" "OK"
+}
+
+# Configure network optimization
+optimize_network() {
+    print_section "Network Optimization"
+    
+    # Optimize sysctl parameters
+    cat > /etc/sysctl.d/99-network-performance.conf << EOF
+# TCP optimization
+net.ipv4.tcp_fin_timeout = 10
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_max_syn_backlog = 4096
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 87380 16777216
+
+# UDP optimization
+net.ipv4.udp_rmem_min = 8192
+net.ipv4.udp_wmem_min = 8192
+
+# Network core optimization
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.somaxconn = 4096
+net.core.netdev_max_backlog = 4096
+
+# IPv4 optimization
+net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.tcp_window_scaling = 1
+net.ipv4.tcp_timestamps = 1
+net.ipv4.tcp_sack = 1
+EOF
+
+    # Apply sysctl changes
+    sysctl -p /etc/sysctl.d/99-network-performance.conf >/dev/null 2>&1
+    
+    print_status "Network Parameters" "OK"
 }
 
 # Configure DNS
 configure_dns() {
-    print_section "Configuring DNS"
-    case $OS in
-        debian)
-            cat > /etc/resolv.conf << EOF
+    print_section "DNS Configuration"
+    
+    # Backup original resolv.conf
+    cp /etc/resolv.conf /etc/resolv.conf.backup
+    
+    # Configure new resolv.conf
+    cat > /etc/resolv.conf << EOF
 nameserver $PRIMARY_DNS
 nameserver $SECONDARY_DNS
 nameserver $TERTIARY_DNS
 nameserver $QUATERNARY_DNS
 options edns0 trust-ad
 EOF
-            resolvconf -u
-            ;;
-        fedora|arch)
-            cat > /etc/systemd/resolved.conf << EOF
-[Resolve]
-DNS=$PRIMARY_DNS $SECONDARY_DNS
-FallbackDNS=$TERTIARY_DNS $QUATERNARY_DNS
-DNSSEC=yes
-DNSOverTLS=yes
-Cache=yes
-DNSStubListener=yes
+    
+    # Configure DNSMasq
+    cat > /etc/dnsmasq.conf << EOF
+# DNS servers
+server=$PRIMARY_DNS
+server=$SECONDARY_DNS
+
+# Basic configuration
+listen-address=127.0.0.1
+cache-size=1000
+neg-ttl=60
+dns-forward-max=150
+
+# Performance optimization
+dns-forward-max=150
+cache-size=1000
+min-cache-ttl=3600
 EOF
-            systemctl restart systemd-resolved
-            ;;
-    esac
+
+    # Start services
+    systemctl enable dnsmasq >/dev/null 2>&1
+    systemctl restart dnsmasq >/dev/null 2>&1
+    
     print_status "DNS Configuration" "OK"
 }
 
-# Configure DNSMasq
-setup_dnsmasq() {
-    print_section "Setting up DNSMasq"
-    cat > /etc/dnsmasq.conf << EOF
-server=$PRIMARY_DNS
-server=$SECONDARY_DNS
-cache-size=1000
-no-negcache
-dns-forward-max=150
-no-resolv
-EOF
+# Test network performance
+test_network() {
+    print_section "Network Performance Test"
     
-    systemctl enable dnsmasq >/dev/null 2>&1
-    systemctl restart dnsmasq >/dev/null 2>&1
-    print_status "DNSMasq Configuration" "OK"
-}
-
-# Configure Stubby
-setup_stubby() {
-    print_section "Setting up DNS-over-TLS"
-    cat > /etc/stubby/stubby.yml << EOF
-resolution_type: GETDNS_RESOLUTION_STUB
-dns_transport_list:
-  - GETDNS_TRANSPORT_TLS
-tls_authentication: GETDNS_AUTHENTICATION_REQUIRED
-tls_query_padding_blocksize: 128
-edns_client_subnet_private: 1
-round_robin_upstreams: 1
-idle_timeout: 10000
-listen_addresses:
-  - 127.0.0.1@53000
-  - 0::1@53000
-upstream_recursive_servers:
-  - address_data: $PRIMARY_DNS
-    tls_auth_name: "dns.google"
-  - address_data: $SECONDARY_DNS
-    tls_auth_name: "dns.google"
-EOF
-
-    systemctl enable stubby >/dev/null 2>&1
-    systemctl restart stubby >/dev/null 2>&1
-    print_status "DNS-over-TLS Configuration" "OK"
-}
-
-# Test configuration
-test_configuration() {
-    print_section "Testing DNS Configuration"
+    echo -e "${DIM}Testing network performance...${NC}"
     
-    local test_domains=("google.com" "cloudflare.com" "github.com")
-    local total_time=0
-    local tests_passed=0
-    local total_tests=${#test_domains[@]}
+    # Test DNS resolution
+    local dns_time=$(dig google.com | grep "Query time:" | awk '{print $4}')
+    echo -e "DNS Resolution Time: ${BOLD}${dns_time}ms${NC}"
     
-    echo -e "${DIM}Validating DNS resolution and performance...${NC}\n"
-    
-    for domain in "${test_domains[@]}"; do
-        printf "${ITALIC}Testing %-20s${NC}" "$domain"
-        if response_time=$(dig "$domain" +short | grep -v ";" | head -n 1 | xargs ping -c 1 -W 2 2>/dev/null | grep "time=" | cut -d "=" -f 4 | cut -d " " -f 1); then
-            echo -e "${GREEN}[✓] ${response_time}ms${NC}"
-            total_time=$(echo "$total_time + $response_time" | bc)
-            tests_passed=$((tests_passed + 1))
-        else
-            echo -e "${RED}[✗] Failed${NC}"
-        fi
-    done
-    
-    echo
-    if [ $tests_passed -eq $total_tests ]; then
-        local avg_time=$(echo "scale=2; $total_time / $total_tests" | bc)
-        print_status "Overall DNS Status" "OK"
-        echo -e "${BOLD}${GREEN}► Average Response Time: ${avg_time}ms${NC}"
-    else
-        print_status "Overall DNS Status" "WARN"
-        echo -e "${BOLD}${YELLOW}► $tests_passed/$total_tests tests passed${NC}"
+    # Test connection speed if speedtest-cli is available
+    if command -v speedtest-cli >/dev/null 2>&1; then
+        echo -e "\n${DIM}Running speed test...${NC}"
+        speedtest-cli --simple
     fi
-}
-
-# Print summary of actions
-print_summary() {
-    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
-    echo -e "${BOLD}${GREEN}                              Configuration Complete${NC}"
-    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
-    echo -e "${DIM}Summary of changes made:${NC}"
-    echo -e "${BOLD}${WHITE}  • Primary DNS:${NC}   $PRIMARY_DNS"
-    echo -e "${BOLD}${WHITE}  • Secondary DNS:${NC} $SECONDARY_DNS"
-    echo -e "${BOLD}${WHITE}  • DNS-over-TLS:${NC}  Enabled"
-    echo -e "${BOLD}${WHITE}  • DNS Caching:${NC}   Enabled via DNSMasq"
-    echo -e "${BOLD}${WHITE}  • Interface:${NC}     $CONNECTION"
-    echo
-    echo -e "${DIM}For any issues or feedback, please visit:${NC}"
-    echo -e "${BLUE}https://github.com/q4n0/dns-config${NC}"
-    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+    
+    print_status "Network Test" "OK"
 }
 
 # Main function
 main() {
     print_banner
-    
-    # Check if help is requested
-    if [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
-        echo -e "${BOLD}Usage:${NC}"
-        echo -e "  sudo ./$(basename $0) [OPTIONS]"
-        echo
-        echo -e "${BOLD}Options:${NC}"
-        echo -e "  -h, --help     Show this help message"
-        echo -e "  -v, --version  Show version information"
-        echo
-        echo -e "${BOLD}Description:${NC}"
-        echo "  This tool optimizes your DNS configuration for better"
-        echo "  performance and security. It automatically selects the"
-        echo "  fastest DNS servers and configures DNS-over-TLS for"
-        echo "  encrypted queries."
-        echo
-        echo -e "${BOLD}For more information and updates, visit:${NC}"
-        echo "  https://github.com/q4n0/mydns"
-        echo
-        exit 0
-    fi
-
-    # Version information
-    if [[ "$1" == "-v" ]] || [[ "$1" == "--version" ]]; then
-        echo -e "${BOLD}DNS Configuration Utility${NC}"
-        echo -e "Version 1.2.0"
-        echo -e "Released: 2024"
-        exit 0
-    fi
-
-    print_section "Checking Prerequisites"
     check_root
     detect_os
     install_requirements
-    get_active_connection
-    find_fastest_dns
+    disable_metered_connections
+    optimize_network
     configure_dns
-    setup_dnsmasq
-    setup_stubby
-    test_configuration
-    print_summary
+    test_network
+    
+    echo -e "\n${GREEN}Network optimization completed successfully!${NC}"
 }
 
-# Run main function with arguments
+# Run main function
 main "$@"
