@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Enhanced color scheme
 BOLD='\033[1m'
@@ -38,7 +38,7 @@ print_banner() {
     echo -e "${NC}"
     printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
     echo -e "${BOLD}${PURPLE}                          Advanced DNS Configuration Utility${NC}"
-    echo -e "${DIM}                               Version 1.1.0 - 2024${NC}"
+    echo -e "${DIM}                               Version 1.2.0 - 2024${NC}"
     printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
     echo
     echo -e "${BOLD}${CYAN}Developer Info:${NC}"
@@ -105,6 +105,23 @@ show_spinner() {
     printf "\r%-50s${GREEN}[✓]${NC}\n" "$text"
 }
 
+# Function to check if a package is installed
+check_package() {
+    local package="$1"
+    case $OS in
+        debian)
+            dpkg -l "$package" >/dev/null 2>&1
+            ;;
+        fedora)
+            rpm -q "$package" >/dev/null 2>&1
+            ;;
+        arch)
+            pacman -Qi "$package" >/dev/null 2>&1
+            ;;
+    esac
+    return $?
+}
+
 # Detect OS
 detect_os() {
     if [ -f /etc/debian_version ]; then
@@ -141,24 +158,135 @@ check_root() {
     print_status "Root Privileges" "OK"
 }
 
-# Install required packages
+# Install required packages with improved checking
 install_requirements() {
-    print_status "Installing Dependencies" "INFO"
+    print_section "Checking and Installing Dependencies"
+    
+    # Define required packages for each OS
+    declare -A packages
     case $OS in
         debian)
-            $PM_UPDATE >/dev/null 2>&1
-            $PM_INSTALL dnsutils bc mtr speedtest-cli resolvconf dnsmasq stubby >/dev/null 2>&1
+            packages=(
+                ["dnsutils"]="DNS utilities"
+                ["bc"]="Basic calculator"
+                ["mtr"]="Network diagnostic tool"
+                ["speedtest-cli"]="Internet speed test"
+                ["resolvconf"]="DNS resolver configuration"
+                ["dnsmasq"]="DNS forwarder"
+                ["stubby"]="DNS-over-TLS resolver"
+            )
             ;;
         fedora)
-            $PM_UPDATE >/dev/null 2>&1
-            $PM_INSTALL bind-utils bc mtr speedtest-cli systemd-resolved dnsmasq stubby >/dev/null 2>&1
+            packages=(
+                ["bind-utils"]="DNS utilities"
+                ["bc"]="Basic calculator"
+                ["mtr"]="Network diagnostic tool"
+                ["speedtest-cli"]="Internet speed test"
+                ["systemd-resolved"]="System resolver"
+                ["dnsmasq"]="DNS forwarder"
+                ["stubby"]="DNS-over-TLS resolver"
+            )
             ;;
         arch)
-            $PM_UPDATE >/dev/null 2>&1
-            $PM_INSTALL dnsutils bc mtr speedtest-cli systemd-resolved dnsmasq stubby >/dev/null 2>&1
+            packages=(
+                ["dnsutils"]="DNS utilities"
+                ["bc"]="Basic calculator"
+                ["mtr"]="Network diagnostic tool"
+                ["speedtest-cli"]="Internet speed test"
+                ["systemd-resolved"]="System resolver"
+                ["dnsmasq"]="DNS forwarder"
+                ["stubby"]="DNS-over-TLS resolver"
+            )
             ;;
     esac
-    print_status "Package Installation" "OK"
+
+    # Count total packages for progress bar
+    local total_packages=${#packages[@]}
+    local current=0
+    local missing_packages=()
+    local installed_count=0
+    
+    echo -e "${DIM}Checking installed packages...${NC}\n"
+    
+    # Check existing packages
+    for pkg in "${!packages[@]}"; do
+        current=$((current + 1))
+        show_progress "Checking ${packages[$pkg]}" $current $total_packages
+        
+        if check_package "$pkg"; then
+            installed_count=$((installed_count + 1))
+        else
+            missing_packages+=("$pkg")
+        fi
+        sleep 0.1
+    done
+    echo -e "\n"
+    
+    # Print status of installed packages
+    if [ ${#missing_packages[@]} -eq 0 ]; then
+        print_status "Required Packages" "OK"
+        echo -e "${DIM}All required packages are already installed${NC}"
+        return 0
+    fi
+    
+    # Install missing packages
+    print_status "Missing Packages" "INFO"
+    echo -e "${DIM}The following packages need to be installed:${NC}"
+    for pkg in "${missing_packages[@]}"; do
+        echo -e "${YELLOW}  • ${pkg} - ${packages[$pkg]}${NC}"
+    done
+    echo
+    
+    # Update package manager
+    print_status "Updating Package Manager" "INFO"
+    (
+        case $OS in
+            debian)
+                $PM_UPDATE >/dev/null 2>&1
+                ;;
+            fedora)
+                $PM_UPDATE >/dev/null 2>&1
+                ;;
+            arch)
+                $PM_UPDATE >/dev/null 2>&1
+                ;;
+        esac
+    ) &
+    show_spinner $! "Updating package database"
+    
+    # Install missing packages with progress
+    local install_current=0
+    local install_total=${#missing_packages[@]}
+    
+    for pkg in "${missing_packages[@]}"; do
+        install_current=$((install_current + 1))
+        print_status "Installing ${packages[$pkg]}" "INFO"
+        (
+            case $OS in
+                debian|fedora|arch)
+                    $PM_INSTALL "$pkg" >/dev/null 2>&1
+                    ;;
+            esac
+        ) &
+        show_spinner $! "Installing $pkg"
+    done
+    
+    # Verify installations
+    local verify_failed=()
+    for pkg in "${missing_packages[@]}"; do
+        if ! check_package "$pkg"; then
+            verify_failed+=("$pkg")
+        fi
+    done
+    
+    if [ ${#verify_failed[@]} -eq 0 ]; then
+        print_status "Package Installation" "OK"
+        echo -e "${DIM}Successfully installed ${#missing_packages[@]} packages${NC}"
+    else
+        print_status "Package Installation" "WARN"
+        echo -e "${RED}Failed to install: ${verify_failed[*]}${NC}"
+        exit 1
+    fi
 }
 
 # Get active network connection
@@ -323,6 +451,23 @@ test_configuration() {
     fi
 }
 
+# Print summary of actions
+print_summary() {
+    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+    echo -e "${BOLD}${GREEN}                              Configuration Complete${NC}"
+    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+    echo -e "${DIM}Summary of changes made:${NC}"
+    echo -e "${BOLD}${WHITE}  • Primary DNS:${NC}   $PRIMARY_DNS"
+    echo -e "${BOLD}${WHITE}  • Secondary DNS:${NC} $SECONDARY_DNS"
+    echo -e "${BOLD}${WHITE}  • DNS-over-TLS:${NC}  Enabled"
+    echo -e "${BOLD}${WHITE}  • DNS Caching:${NC}   Enabled via DNSMasq"
+    echo -e "${BOLD}${WHITE}  • Interface:${NC}     $CONNECTION"
+    echo
+    echo -e "${DIM}For any issues or feedback, please visit:${NC}"
+    echo -e "${BLUE}https://github.com/q4n0/dns-config${NC}"
+    printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
+}
+
 # Main function
 main() {
     print_banner
@@ -348,6 +493,14 @@ main() {
         exit 0
     fi
 
+    # Version information
+    if [[ "$1" == "-v" ]] || [[ "$1" == "--version" ]]; then
+        echo -e "${BOLD}DNS Configuration Utility${NC}"
+        echo -e "Version 1.2.0"
+        echo -e "Released: 2024"
+        exit 0
+    fi
+
     print_section "Checking Prerequisites"
     check_root
     detect_os
@@ -358,15 +511,7 @@ main() {
     setup_dnsmasq
     setup_stubby
     test_configuration
-    
-    print_header() {
-        printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
-        echo -e "${BOLD}${GREEN}                              Configuration Complete${NC}"
-        printf "%${TERM_WIDTH}s\n" | tr ' ' '═'
-        echo -e "${GREEN}DNS configuration has been successfully completed!${NC}\n"
-    }
-    
-    print_header
+    print_summary
 }
 
 # Run main function with arguments
