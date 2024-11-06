@@ -488,7 +488,7 @@ main() {
         echo "  encrypted queries."
         echo
         echo -e "${BOLD}For more information and updates, visit:${NC}"
-        echo "  https://github.com/q4n0/dns-config"
+        echo "  https://github.com/q4n0/mydns"
         echo
         exit 0
     fi
