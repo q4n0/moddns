@@ -92,10 +92,6 @@ Please report issues on our GitHub repository, including:
 - Output of the script
 - Contents of `/var/log/dns_optimizer.log`
 
-## 📜 License
-
-[Choose an appropriate open-source license, e.g., MIT, GPL]
-
 ## 🌟 Disclaimer
 
 ModDNS is provided "as-is" without warranties. Always review and understand the script before running, and maintain backups of critical system configurations.
